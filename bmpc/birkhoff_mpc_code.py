@@ -146,7 +146,7 @@ class BirkhoffMPC:
         self.solver = ca.nlpsol("solver", "ipopt", nlp, solver_opts)
 
         # Variable bounds
-        n_vars = (self.n_states + self.n_states + self.n_controls) * (self.N + 1)
+        (self.n_states + self.n_states + self.n_controls) * (self.N + 1)
         self.lbx = ca.DM(
             [-ca.inf] * (2 * self.n_states * (self.N + 1))
             + [self.v_min] * (self.n_controls * (self.N + 1))

@@ -130,7 +130,7 @@ class TestPaperSpecificImplementation:
     """Test implementation against exact paper specifications."""
 
     @pytest.mark.parametrize(
-        "N,grid_type",
+        ("N", "grid_type"),
         [
             (2, "LGL"),
             (3, "LGL"),
@@ -266,7 +266,7 @@ class TestPaperSpecificImplementation:
                 expected_B_j_a = L_j_eval - L_j_tau_a
 
                 # Get B_j^a(eval_tau) from our implementation
-                basis_a, _ = components.birkhoff_basis_a, components.birkhoff_basis_b
+                _basis_a, _ = components.birkhoff_basis_a, components.birkhoff_basis_b
 
                 # Find the row corresponding to eval_tau
                 # We need to compute basis functions at eval_tau
