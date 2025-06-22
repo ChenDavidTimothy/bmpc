@@ -57,6 +57,74 @@ def generate_cgl_grid(N):
     return tau_j
 
 
+def verify_birkhoff_constraints(X_sol, V_sol, U_sol, birkhoff_components, time_scaling, P):
+    """Verify mathematical correctness of Birkhoff constraints"""
+    B_a = birkhoff_components.birkhoff_matrix_a
+    w_B = birkhoff_components.birkhoff_quadrature_weights
+
+    n_states = X_sol.shape[0]
+    N = X_sol.shape[1] - 1
+
+    # Convert to numpy for verification
+    X_np = DM2Arr(X_sol)
+    V_np = DM2Arr(V_sol)
+    U_np = DM2Arr(U_sol)
+    P_np = DM2Arr(P)
+
+    x_a = P_np[:n_states]
+
+    # Test 1: Interpolation constraint X = x^a + B^a * V
+    print("=== Birkhoff Constraint Verification ===")
+
+    max_interp_error = 0
+    for k in range(N + 1):
+        expected = x_a + np.sum([B_a[k, j] * V_np[:, j] for j in range(N + 1)], axis=0)
+        actual = X_np[:, k]
+        error = np.linalg.norm(actual - expected)
+        max_interp_error = max(max_interp_error, error)
+
+    print(f"Max interpolation constraint error: {max_interp_error:.2e}")
+
+    # Test 2: Equivalence constraint x^b = x^a + w_B^T * V
+    x_b_expected = x_a + np.sum([w_B[j] * V_np[:, j] for j in range(N + 1)], axis=0)
+    x_b_actual = X_np[:, N]
+    equiv_error = np.linalg.norm(x_b_actual - x_b_expected)
+    print(f"Equivalence constraint error: {equiv_error:.2e}")
+
+    # Test 3: Dynamics constraint V = time_scaling * f(X, U)
+    max_dyn_error = 0
+    for k in range(N + 1):
+        # Compute f(X[:, k], U[:, k]) manually for verification
+        x, y, theta = X_np[:, k]
+        v_a, v_b, v_c, v_d = U_np[:, k]
+
+        # Mecanum wheel dynamics
+        rot_3d_z = np.array(
+            [[np.cos(theta), -np.sin(theta), 0], [np.sin(theta), np.cos(theta), 0], [0, 0, 1]]
+        )
+
+        J = (wheel_radius / 4) * np.array(
+            [
+                [1, 1, 1, 1],
+                [-1, 1, 1, -1],
+                [-1 / (Lx + Ly), 1 / (Lx + Ly), -1 / (Lx + Ly), 1 / (Lx + Ly)],
+            ]
+        )
+
+        dynamics = rot_3d_z @ J @ U_np[:, k]
+        expected_V = time_scaling * dynamics
+        actual_V = V_np[:, k]
+        error = np.linalg.norm(actual_V - expected_V)
+        max_dyn_error = max(max_dyn_error, error)
+
+    print(f"Max dynamics constraint error: {max_dyn_error:.2e}")
+
+    # Verify Birkhoff basis properties
+    print(f"Sum of quadrature weights: {np.sum(w_B):.6f} (should be 2.0)")
+
+    return max_interp_error < 1e-6 and equiv_error < 1e-6 and max_dyn_error < 1e-6
+
+
 # MATHEMATICAL SETUP - EXACT FROM BIRKHOFF THEORY
 tau_grid = generate_cgl_grid(N)
 birkhoff_components = _compute_birkhoff_basis_components(tuple(tau_grid), -1.0, 1.0)
@@ -76,10 +144,10 @@ V_d = ca.SX.sym("V_d")
 controls = ca.vertcat(V_a, V_b, V_c, V_d)
 n_controls = controls.numel()
 
-# Optimization variables: States, Virtual variables (derivatives), Controls
+# CORRECTED: Optimization variables with controls at ALL grid points
 X = ca.SX.sym("X", n_states, N + 1)  # States at grid points
 V = ca.SX.sym("V", n_states, N + 1)  # Virtual variables (derivatives)
-U = ca.SX.sym("U", n_controls, N)  # Controls
+U = ca.SX.sym("U", n_controls, N + 1)  # FIXED: Controls at ALL grid points
 
 # Parameters: initial state and target state
 P = ca.SX.sym("P", n_states + n_states)
@@ -117,12 +185,10 @@ time_scaling = (step_horizon * N) / 2.0
 cost_fn = 0
 for k in range(N + 1):
     st = X[:, k]
-    stage_cost = (st - P[n_states:]).T @ Q @ (st - P[n_states:])
+    con = U[:, k]  # FIXED: Control available at all points
 
-    # Add control cost only for k < N (controls defined for k=0..N-1)
-    if k < N:
-        con = U[:, k]
-        stage_cost += con.T @ R @ con
+    stage_cost = (st - P[n_states:]).T @ Q @ (st - P[n_states:])
+    stage_cost += con.T @ R @ con
 
     # Birkhoff quadrature integration
     cost_fn += w_B[k] * time_scaling * stage_cost
@@ -134,32 +200,20 @@ g = []
 g.append(X[:, 0] - P[:n_states])
 
 # 2. BIRKHOFF INTERPOLATION CONSTRAINT: X = x^a * ones + B^a * V
-# This implements equation: X[:, k] = x^a + sum_j(B^a[k,j] * V[:, j])
-ones_vec = ca.DM.ones(N + 1, 1)
 for k in range(N + 1):
     interpolation_constraint = X[:, k] - P[:n_states]  # Start with X[:, k] - x^a
     for j in range(N + 1):
         interpolation_constraint -= B_a[k, j] * V[:, j]  # Subtract B^a * V
     g.append(interpolation_constraint)
 
-# 3. DYNAMICS CONSTRAINT: V = time_scaling * f(X, U)
-# This enforces that virtual variables equal scaled dynamics
-for k in range(N):
+# 3. CORRECTED: DYNAMICS CONSTRAINT V = time_scaling * f(X, U) for ALL points
+for k in range(N + 1):
     st = X[:, k]
-    con = U[:, k]
+    con = U[:, k]  # FIXED: Proper control at each point
     dynamics_constraint = V[:, k] - time_scaling * f(st, con)
     g.append(dynamics_constraint)
 
-# Handle final virtual variable (no control at k=N)
-# Use final state dynamics with final control (duplicated)
-st_final = X[:, N]
-con_final = U[:, N - 1]  # Use last available control
-dynamics_final = V[:, N] - time_scaling * f(st_final, con_final)
-g.append(dynamics_final)
-
-# 4. CRITICAL: BIRKHOFF EQUIVALENCE CONDITION
-# From Paper Equation (16): x^b = x^a + w_B^T * V
-# This is the key constraint that makes Birkhoff interpolation mathematically correct
+# 4. BIRKHOFF EQUIVALENCE CONDITION: x^b = x^a + w_B^T * V
 equivalence_constraint = X[:, N] - P[:n_states]  # x^b - x^a
 for j in range(N + 1):
     equivalence_constraint -= w_B[j] * V[:, j]  # Subtract w_B^T * V
@@ -189,24 +243,26 @@ opts = {
 
 solver = ca.nlpsol("solver", "ipopt", nlp_prob, opts)
 
-# VARIABLE BOUNDS
-n_vars = OPT_variables.size1()
+# CORRECTED: VARIABLE BOUNDS
+n_X = n_states * (N + 1)
+n_V = n_states * (N + 1)
+n_U = n_controls * (N + 1)  # FIXED: Controls at all points
+n_vars = n_X + n_V + n_U
+
 lbx = ca.DM.zeros((n_vars, 1))
 ubx = ca.DM.zeros((n_vars, 1))
 
 # State bounds (unbounded)
-n_X = n_states * (N + 1)
 for i in range(n_X):
     lbx[i] = -ca.inf
     ubx[i] = ca.inf
 
 # Virtual variable bounds (unbounded)
-n_V = n_states * (N + 1)
 for i in range(n_X, n_X + n_V):
     lbx[i] = -ca.inf
     ubx[i] = ca.inf
 
-# Control bounds
+# CORRECTED: Control bounds for ALL points
 for i in range(n_X + n_V, n_vars):
     lbx[i] = v_min
     ubx[i] = v_max
@@ -224,7 +280,7 @@ state_init = ca.DM([x_init, y_init, theta_init])
 state_target = ca.DM([x_target, y_target, theta_target])
 
 t = ca.DM(t0)
-u0 = ca.DM.zeros((n_controls, N))
+u0 = ca.DM.zeros((n_controls, N + 1))  # FIXED: Initialize all controls
 X0 = ca.repmat(state_init, 1, N + 1)
 V0 = ca.DM.zeros((n_states, N + 1))
 
@@ -244,9 +300,9 @@ if __name__ == "__main__":
 
         # Set initial guess
         args["x0"] = ca.vertcat(
-            ca.reshape(X0, n_states * (N + 1), 1),
-            ca.reshape(V0, n_states * (N + 1), 1),
-            ca.reshape(u0, n_controls * N, 1),
+            ca.reshape(X0, n_X, 1),
+            ca.reshape(V0, n_V, 1),
+            ca.reshape(u0, n_U, 1),  # FIXED: Proper dimensions
         )
 
         # Solve optimization
@@ -260,12 +316,20 @@ if __name__ == "__main__":
         )
 
         # Extract solution
-        n_X = n_states * (N + 1)
-        n_V = n_states * (N + 1)
-
         X_sol = ca.reshape(sol["x"][:n_X], n_states, N + 1)
         V_sol = ca.reshape(sol["x"][n_X : n_X + n_V], n_states, N + 1)
-        u = ca.reshape(sol["x"][n_X + n_V :], n_controls, N)
+        u = ca.reshape(sol["x"][n_X + n_V :], n_controls, N + 1)  # FIXED
+
+        # VERIFICATION: Check mathematical correctness
+        if mpc_iter == 0:  # Verify on first iteration
+            is_valid = verify_birkhoff_constraints(
+                X_sol, V_sol, u, birkhoff_components, time_scaling, args["p"]
+            )
+            if not is_valid:
+                print("❌ MATHEMATICAL CONSTRAINTS VIOLATED!")
+                break
+            else:
+                print("✅ Birkhoff constraints satisfied")
 
         # Store results
         cat_states = np.dstack((cat_states, DM2Arr(X_sol)))
@@ -275,10 +339,10 @@ if __name__ == "__main__":
         # Apply first control and integrate real system forward
         t0, state_init = apply_control_and_integrate(step_horizon, t0, state_init, u[:, 0])
 
-        # Warm start for next iteration
+        # CORRECTED: Warm start for next iteration
         X0 = ca.horzcat(X_sol[:, 1:], ca.reshape(X_sol[:, -1], -1, 1))
         V0 = ca.horzcat(V_sol[:, 1:], ca.reshape(V_sol[:, -1], -1, 1))
-        u0 = ca.horzcat(u[:, 1:], ca.reshape(u[:, -1], -1, 1))
+        u0 = ca.horzcat(u[:, 1:], ca.reshape(u[:, -1], -1, 1))  # FIXED
 
         t2 = time()
         print(f"MPC Iteration: {mpc_iter}, Time: {(t2 - t1) * 1000:.2f}ms")
