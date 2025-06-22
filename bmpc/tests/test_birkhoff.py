@@ -75,11 +75,7 @@ class TestBirkhoffMathematicalCorrectness:
 
     @pytest.mark.parametrize(
         "grid_case",
-        [
-            "uniform_on_unit_interval",
-            "uniform_on_symmetric_interval",
-            "simple_non_uniform",
-        ],
+        ["uniform_on_unit_interval", "uniform_on_symmetric_interval", "simple_non_uniform"],
     )
     def test_equivalence_condition_with_known_weights(self, grid_case):
         """

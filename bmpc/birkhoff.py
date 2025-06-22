@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from typing import cast
 
 import numpy as np
-from constants import NUMERICAL_ZERO
 from scipy.integrate import quad
+
+from bmpc.constants import NUMERICAL_ZERO
 
 from .bmpc_types import FloatArray
 
