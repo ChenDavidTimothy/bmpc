@@ -38,7 +38,7 @@ v_min = -1
 
 
 def apply_control_and_integrate(step_horizon, t0, state_init, u_first):
-    """Apply first control and integrate actual system forward - UNCHANGED from original"""
+    """Apply first control and integrate actual system forward"""
     f_value = f(state_init, u_first)
     next_state = ca.DM.full(state_init + (step_horizon * f_value))
     t0 = t0 + step_horizon
@@ -57,8 +57,8 @@ def generate_cgl_grid(N):
     return tau_j
 
 
-def verify_birkhoff_constraints(X_sol, V_sol, U_sol, birkhoff_components, time_scaling, P):
-    """Verify mathematical correctness of Birkhoff constraints"""
+def verify_minimal_constraints(X_sol, V_sol, U_sol, birkhoff_components, time_scaling, P):
+    """Verify the minimal constraint set for mathematical correctness"""
     B_a = birkhoff_components.birkhoff_matrix_a
     w_B = birkhoff_components.birkhoff_quadrature_weights
 
@@ -73,9 +73,9 @@ def verify_birkhoff_constraints(X_sol, V_sol, U_sol, birkhoff_components, time_s
 
     x_a = P_np[:n_states]
 
-    # Test 1: Interpolation constraint X = x^a + B^a * V
-    print("=== Birkhoff Constraint Verification ===")
+    print("=== Minimal Birkhoff Constraint Verification ===")
 
+    # Test 1: Interpolation constraint for ALL k (includes initial condition automatically)
     max_interp_error = 0
     for k in range(N + 1):
         expected = x_a + np.sum([B_a[k, j] * V_np[:, j] for j in range(N + 1)], axis=0)
@@ -85,16 +85,9 @@ def verify_birkhoff_constraints(X_sol, V_sol, U_sol, birkhoff_components, time_s
 
     print(f"Max interpolation constraint error: {max_interp_error:.2e}")
 
-    # Test 2: Equivalence constraint x^b = x^a + w_B^T * V
-    x_b_expected = x_a + np.sum([w_B[j] * V_np[:, j] for j in range(N + 1)], axis=0)
-    x_b_actual = X_np[:, N]
-    equiv_error = np.linalg.norm(x_b_actual - x_b_expected)
-    print(f"Equivalence constraint error: {equiv_error:.2e}")
-
-    # Test 3: Dynamics constraint V = time_scaling * f(X, U)
+    # Test 2: Dynamics constraint V = time_scaling * f(X, U)
     max_dyn_error = 0
     for k in range(N + 1):
-        # Compute f(X[:, k], U[:, k]) manually for verification
         x, y, theta = X_np[:, k]
         v_a, v_b, v_c, v_d = U_np[:, k]
 
@@ -119,10 +112,26 @@ def verify_birkhoff_constraints(X_sol, V_sol, U_sol, birkhoff_components, time_s
 
     print(f"Max dynamics constraint error: {max_dyn_error:.2e}")
 
-    # Verify Birkhoff basis properties
-    print(f"Sum of quadrature weights: {np.sum(w_B):.6f} (should be 2.0)")
+    # Verify automatic properties for CGL grids
+    # Property 1: Initial condition automatically satisfied
+    initial_error = np.linalg.norm(X_np[:, 0] - x_a)
+    print(f"Initial condition error (automatic): {initial_error:.2e}")
 
-    return max_interp_error < 1e-6 and equiv_error < 1e-6 and max_dyn_error < 1e-6
+    # Property 2: Equivalence condition automatically satisfied
+    x_b_expected = x_a + np.sum([w_B[j] * V_np[:, j] for j in range(N + 1)], axis=0)
+    x_b_actual = X_np[:, N]
+    equiv_error = np.linalg.norm(x_b_actual - x_b_expected)
+    print(f"Equivalence condition error (automatic): {equiv_error:.2e}")
+
+    # Verify CGL grid mathematical property: B^a[N,j] = w_B[j]
+    weight_consistency_error = np.linalg.norm(B_a[N, :] - w_B)
+    print(f"CGL property B^a[N,:] = w_B error: {weight_consistency_error:.2e}")
+
+    # Verify CGL grid mathematical property: B^a[0,j] = 0
+    initial_basis_error = np.linalg.norm(B_a[0, :])
+    print(f"CGL property B^a[0,:] = 0 error: {initial_basis_error:.2e}")
+
+    return max_interp_error < 1e-6 and max_dyn_error < 1e-6
 
 
 # MATHEMATICAL SETUP - EXACT FROM BIRKHOFF THEORY
@@ -144,10 +153,10 @@ V_d = ca.SX.sym("V_d")
 controls = ca.vertcat(V_a, V_b, V_c, V_d)
 n_controls = controls.numel()
 
-# CORRECTED: Optimization variables with controls at ALL grid points
+# Optimization variables
 X = ca.SX.sym("X", n_states, N + 1)  # States at grid points
 V = ca.SX.sym("V", n_states, N + 1)  # Virtual variables (derivatives)
-U = ca.SX.sym("U", n_controls, N + 1)  # FIXED: Controls at ALL grid points
+U = ca.SX.sym("U", n_controls, N + 1)  # Controls at ALL grid points
 
 # Parameters: initial state and target state
 P = ca.SX.sym("P", n_states + n_states)
@@ -185,7 +194,7 @@ time_scaling = (step_horizon * N) / 2.0
 cost_fn = 0
 for k in range(N + 1):
     st = X[:, k]
-    con = U[:, k]  # FIXED: Control available at all points
+    con = U[:, k]
 
     stage_cost = (st - P[n_states:]).T @ Q @ (st - P[n_states:])
     stage_cost += con.T @ R @ con
@@ -193,34 +202,37 @@ for k in range(N + 1):
     # Birkhoff quadrature integration
     cost_fn += w_B[k] * time_scaling * stage_cost
 
-# CONSTRAINTS - IMPLEMENTING PROBLEM P^N_a FROM BIRKHOFF PAPERS
+# MINIMAL CONSTRAINT SET FOR CGL GRIDS - ZERO REDUNDANCY
 g = []
 
-# 1. INITIAL CONDITION: X[:, 0] = x^a (initial state)
-g.append(X[:, 0] - P[:n_states])
-
-# 2. BIRKHOFF INTERPOLATION CONSTRAINT: X = x^a * ones + B^a * V
+# Constraint 1: BIRKHOFF INTERPOLATION X = x^a + B^a * V
+# This automatically enforces:
+# - Initial condition at k=0: X[:, 0] = x^a (since B^a[0,j] = 0)
+# - Equivalence condition at k=N: X[:, N] = x^a + w_B^T * V (since B^a[N,j] = w_B[j])
 for k in range(N + 1):
-    interpolation_constraint = X[:, k] - P[:n_states]  # Start with X[:, k] - x^a
+    interpolation_constraint = X[:, k] - P[:n_states]  # X[:, k] - x^a
     for j in range(N + 1):
         interpolation_constraint -= B_a[k, j] * V[:, j]  # Subtract B^a * V
     g.append(interpolation_constraint)
 
-# 3. CORRECTED: DYNAMICS CONSTRAINT V = time_scaling * f(X, U) for ALL points
+# Constraint 2: DYNAMICS V = time_scaling * f(X, U)
 for k in range(N + 1):
     st = X[:, k]
-    con = U[:, k]  # FIXED: Proper control at each point
+    con = U[:, k]
     dynamics_constraint = V[:, k] - time_scaling * f(st, con)
     g.append(dynamics_constraint)
 
-# 4. BIRKHOFF EQUIVALENCE CONDITION: x^b = x^a + w_B^T * V
-equivalence_constraint = X[:, N] - P[:n_states]  # x^b - x^a
-for j in range(N + 1):
-    equivalence_constraint -= w_B[j] * V[:, j]  # Subtract w_B^T * V
-g.append(equivalence_constraint)
+# NO OTHER CONSTRAINTS NEEDED FOR CGL GRIDS!
+# Mathematical proof:
+# - Initial condition: automatic from interpolation at k=0
+# - Equivalence condition: automatic from interpolation at k=N
+# - All boundaries properly handled by CGL grid properties
 
 # Concatenate all constraints
 g = ca.vertcat(*g)
+
+print(f"Constraint count: {g.size1()} (minimal for CGL grids)")
+print(f"Expected: {(n_states * (N + 1)) + (n_states * (N + 1))} = {2 * n_states * (N + 1)}")
 
 # OPTIMIZATION PROBLEM FORMULATION
 OPT_variables = ca.vertcat(
@@ -243,10 +255,10 @@ opts = {
 
 solver = ca.nlpsol("solver", "ipopt", nlp_prob, opts)
 
-# CORRECTED: VARIABLE BOUNDS
+# VARIABLE BOUNDS
 n_X = n_states * (N + 1)
 n_V = n_states * (N + 1)
-n_U = n_controls * (N + 1)  # FIXED: Controls at all points
+n_U = n_controls * (N + 1)
 n_vars = n_X + n_V + n_U
 
 lbx = ca.DM.zeros((n_vars, 1))
@@ -262,7 +274,7 @@ for i in range(n_X, n_X + n_V):
     lbx[i] = -ca.inf
     ubx[i] = ca.inf
 
-# CORRECTED: Control bounds for ALL points
+# Control bounds
 for i in range(n_X + n_V, n_vars):
     lbx[i] = v_min
     ubx[i] = v_max
@@ -280,7 +292,7 @@ state_init = ca.DM([x_init, y_init, theta_init])
 state_target = ca.DM([x_target, y_target, theta_target])
 
 t = ca.DM(t0)
-u0 = ca.DM.zeros((n_controls, N + 1))  # FIXED: Initialize all controls
+u0 = ca.DM.zeros((n_controls, N + 1))
 X0 = ca.repmat(state_init, 1, N + 1)
 V0 = ca.DM.zeros((n_states, N + 1))
 
@@ -302,7 +314,7 @@ if __name__ == "__main__":
         args["x0"] = ca.vertcat(
             ca.reshape(X0, n_X, 1),
             ca.reshape(V0, n_V, 1),
-            ca.reshape(u0, n_U, 1),  # FIXED: Proper dimensions
+            ca.reshape(u0, n_U, 1),
         )
 
         # Solve optimization
@@ -318,18 +330,18 @@ if __name__ == "__main__":
         # Extract solution
         X_sol = ca.reshape(sol["x"][:n_X], n_states, N + 1)
         V_sol = ca.reshape(sol["x"][n_X : n_X + n_V], n_states, N + 1)
-        u = ca.reshape(sol["x"][n_X + n_V :], n_controls, N + 1)  # FIXED
+        u = ca.reshape(sol["x"][n_X + n_V :], n_controls, N + 1)
 
-        # VERIFICATION: Check mathematical correctness
-        if mpc_iter == 0:  # Verify on first iteration
-            is_valid = verify_birkhoff_constraints(
+        # VERIFICATION: Check mathematical correctness (first iteration only)
+        if mpc_iter == 0:
+            is_valid = verify_minimal_constraints(
                 X_sol, V_sol, u, birkhoff_components, time_scaling, args["p"]
             )
             if not is_valid:
                 print("❌ MATHEMATICAL CONSTRAINTS VIOLATED!")
                 break
             else:
-                print("✅ Birkhoff constraints satisfied")
+                print("✅ Minimal Birkhoff constraints satisfied")
 
         # Store results
         cat_states = np.dstack((cat_states, DM2Arr(X_sol)))
@@ -339,10 +351,10 @@ if __name__ == "__main__":
         # Apply first control and integrate real system forward
         t0, state_init = apply_control_and_integrate(step_horizon, t0, state_init, u[:, 0])
 
-        # CORRECTED: Warm start for next iteration
+        # Warm start for next iteration
         X0 = ca.horzcat(X_sol[:, 1:], ca.reshape(X_sol[:, -1], -1, 1))
         V0 = ca.horzcat(V_sol[:, 1:], ca.reshape(V_sol[:, -1], -1, 1))
-        u0 = ca.horzcat(u[:, 1:], ca.reshape(u[:, -1], -1, 1))  # FIXED
+        u0 = ca.horzcat(u[:, 1:], ca.reshape(u[:, -1], -1, 1))
 
         t2 = time()
         print(f"MPC Iteration: {mpc_iter}, Time: {(t2 - t1) * 1000:.2f}ms")
