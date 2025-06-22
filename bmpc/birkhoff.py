@@ -204,19 +204,6 @@ def _compute_birkhoff_basis_functions(
     return basis_a, basis_b
 
 
-def _construct_birkhoff_matrices(
-    nodes: FloatArray,
-    barycentric_weights: FloatArray,
-    tau_a: float,
-    tau_b: float,
-) -> tuple[FloatArray, FloatArray]:
-    basis_a, basis_b = _compute_birkhoff_basis_functions(
-        nodes, barycentric_weights, tau_a, tau_b, nodes
-    )
-
-    return basis_a, basis_b
-
-
 @functools.lru_cache(maxsize=32)
 def _compute_birkhoff_basis_components(
     grid_points_tuple: tuple[float, ...],
@@ -272,11 +259,7 @@ def _compute_birkhoff_basis_components(
         grid_points, barycentric_weights, tau_b, reference_point
     )
 
-    birkhoff_matrix_a, birkhoff_matrix_b = _construct_birkhoff_matrices(
-        grid_points, barycentric_weights, tau_a, tau_b
-    )
-
-    basis_a, basis_b = _compute_birkhoff_basis_functions(
+    birkhoff_matrix_a, birkhoff_matrix_b = _compute_birkhoff_basis_functions(
         grid_points, barycentric_weights, tau_a, tau_b, grid_points
     )
 
@@ -287,8 +270,8 @@ def _compute_birkhoff_basis_components(
         lagrange_antiderivatives_at_tau_a=antiderivatives_at_tau_a,
         lagrange_antiderivatives_at_tau_b=antiderivatives_at_tau_b,
         birkhoff_quadrature_weights=birkhoff_quadrature_weights,
-        birkhoff_basis_a=basis_a,
-        birkhoff_basis_b=basis_b,
+        birkhoff_basis_a=birkhoff_matrix_a,
+        birkhoff_basis_b=birkhoff_matrix_b,
         birkhoff_matrix_a=birkhoff_matrix_a,
         birkhoff_matrix_b=birkhoff_matrix_b,
     )
@@ -308,16 +291,7 @@ def _evaluate_birkhoff_interpolation_a_form(
     num_eval_points = len(evaluation_points)
     interpolated_values = np.zeros(num_eval_points, dtype=np.float64)
 
-    nodes = basis_components.grid_points
-    barycentric_weights = _compute_barycentric_weights_birkhoff(nodes)
-    basis_a, _ = _compute_birkhoff_basis_functions(
-        nodes,
-        barycentric_weights,
-        basis_components.tau_a,
-        basis_components.tau_b,
-        evaluation_points,
-    )
-
+    basis_a = basis_components.birkhoff_basis_a
     for i in range(num_eval_points):
         interpolated_values[i] = y_initial + np.dot(basis_a[i, :], y_derivatives)
 
@@ -338,15 +312,7 @@ def _evaluate_birkhoff_interpolation_b_form(
     num_eval_points = len(evaluation_points)
     interpolated_values = np.zeros(num_eval_points, dtype=np.float64)
 
-    nodes = basis_components.grid_points
-    barycentric_weights = _compute_barycentric_weights_birkhoff(nodes)
-    _, basis_b = _compute_birkhoff_basis_functions(
-        nodes,
-        barycentric_weights,
-        basis_components.tau_a,
-        basis_components.tau_b,
-        evaluation_points,
-    )
+    basis_b = basis_components.birkhoff_basis_b
 
     for i in range(num_eval_points):
         interpolated_values[i] = np.dot(basis_b[i, :], y_derivatives) + y_final
