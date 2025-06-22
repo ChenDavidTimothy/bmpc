@@ -5,11 +5,10 @@ from dataclasses import dataclass, field
 from typing import cast
 
 import numpy as np
+from constants import NUMERICAL_ZERO
 from scipy.integrate import quad
 
-from .input_validation import _validate_positive_integer
-from .mtor_types import FloatArray
-from .utils.constants import NUMERICAL_ZERO
+from .bmpc_types import FloatArray
 
 
 @dataclass
@@ -76,7 +75,11 @@ def _compute_barycentric_weights_birkhoff(nodes: FloatArray) -> FloatArray:
     small_product_mask = np.abs(products) < NUMERICAL_ZERO**2
     safe_products = np.where(
         small_product_mask,
-        np.where(products == 0, 1.0 / (NUMERICAL_ZERO**2), np.sign(products) / (NUMERICAL_ZERO**2)),
+        np.where(
+            products == 0,
+            1.0 / (NUMERICAL_ZERO**2),
+            np.sign(products) / (NUMERICAL_ZERO**2),
+        ),
         1.0 / products,
     )
 
@@ -102,7 +105,9 @@ def _evaluate_lagrange_basis_at_point(
 
     near_zero_mask = np.abs(diffs) < NUMERICAL_ZERO
     safe_diffs = np.where(
-        near_zero_mask, np.where(diffs == 0, NUMERICAL_ZERO, np.sign(diffs) * NUMERICAL_ZERO), diffs
+        near_zero_mask,
+        np.where(diffs == 0, NUMERICAL_ZERO, np.sign(diffs) * NUMERICAL_ZERO),
+        diffs,
     )
 
     terms = barycentric_weights / safe_diffs
@@ -132,7 +137,12 @@ def _compute_lagrange_antiderivative_at_point(
 
         if abs(evaluation_point - reference_point) > NUMERICAL_ZERO:
             integral_result, _ = quad(
-                lagrange_j, reference_point, evaluation_point, epsabs=1e-12, epsrel=1e-10, limit=200
+                lagrange_j,
+                reference_point,
+                evaluation_point,
+                epsabs=1e-12,
+                epsrel=1e-10,
+                limit=200,
             )
             antiderivatives[j] = integral_result
 
@@ -235,7 +245,6 @@ def _compute_birkhoff_basis_components(
     Raises:
         ValueError: If grid points violate mathematical requirements
     """
-    _validate_positive_integer(len(grid_points_tuple), "number of grid points")
 
     grid_points = np.array(grid_points_tuple, dtype=np.float64)
 

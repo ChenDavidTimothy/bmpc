@@ -1,0 +1,1 @@
+NUMERICAL_ZERO = 1e-14

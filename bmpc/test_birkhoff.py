@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from maptor.birkhoff import (
+from bmpc.birkhoff import (
     _compute_birkhoff_basis_components,
     _evaluate_birkhoff_interpolation_a_form,
     _evaluate_birkhoff_interpolation_b_form,
@@ -75,7 +75,11 @@ class TestBirkhoffMathematicalCorrectness:
 
     @pytest.mark.parametrize(
         "grid_case",
-        ["uniform_on_unit_interval", "uniform_on_symmetric_interval", "simple_non_uniform"],
+        [
+            "uniform_on_unit_interval",
+            "uniform_on_symmetric_interval",
+            "simple_non_uniform",
+        ],
     )
     def test_equivalence_condition_with_known_weights(self, grid_case):
         """
