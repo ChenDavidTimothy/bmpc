@@ -22,12 +22,7 @@ def create_triangle(state=None, h=1, w=0.5, update=False):
 
 def simulate(cat_states, cat_controls, t, step_horizon, N, reference, save=False):
     def init():
-        return (
-            path,
-            horizon,
-            current_state,
-            target_state,
-        )
+        return (path, horizon, current_state, target_state)
 
     def animate(i):
         # get variables
@@ -54,14 +49,9 @@ def simulate(cat_states, cat_controls, t, step_horizon, N, reference, save=False
         # xy = target_state.get_xy()
         # target_state.set_xy(xy)
 
-        return (
-            path,
-            horizon,
-            current_state,
-            target_state,
-        )
+        return (path, horizon, current_state, target_state)
 
-    # create figure and axes
+    # Create figure and axes
     fig, ax = plt.subplots(figsize=(6, 6))
     min_scale = min(reference[0], reference[1], reference[3], reference[4]) - 2
     max_scale = max(reference[0], reference[1], reference[3], reference[4]) + 2
@@ -91,6 +81,7 @@ def simulate(cat_states, cat_controls, t, step_horizon, N, reference, save=False
         blit=True,
         repeat=True,
     )
+
     plt.show()
 
     if save:
