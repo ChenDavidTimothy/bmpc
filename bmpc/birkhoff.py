@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass, field
-from typing import cast
 
 import numpy as np
 from scipy.integrate import quad
@@ -12,43 +11,29 @@ from bmpc.constants import NUMERICAL_ZERO
 from .bmpc_types import FloatArray
 
 
+def empty_float_array() -> FloatArray:
+    return np.array([], dtype=np.float64)
+
+
+def empty_float_matrix() -> FloatArray:
+    return np.empty((0, 0), dtype=np.float64)
+
+
 @dataclass
 class BirkhoffBasisComponents:
-    """Components for Birkhoff interpolation method as defined in Section 2 of the paper.
+    """Components for Birkhoff interpolation method as defined in Section 2 of the paper."""
 
-    Contains both a-form and b-form Birkhoff basis functions, quadrature weights,
-    and matrices for arbitrary grid pseudospectral methods following the exact
-    mathematical theory from the Birkhoff paper.
-    """
-
-    grid_points: FloatArray = field(default_factory=lambda: np.array([], dtype=np.float64))
+    grid_points: FloatArray = field(default_factory=empty_float_array)
     tau_a: float = 0.0
     tau_b: float = 1.0
 
-    # Lagrange basis functions and antiderivatives (L_j(τ) from Lemma)
-    lagrange_antiderivatives_at_tau_a: FloatArray = field(
-        default_factory=lambda: np.array([], dtype=np.float64)
-    )
-    lagrange_antiderivatives_at_tau_b: FloatArray = field(
-        default_factory=lambda: np.array([], dtype=np.float64)
-    )
+    lagrange_antiderivatives_at_tau_a: FloatArray = field(default_factory=empty_float_array)
+    lagrange_antiderivatives_at_tau_b: FloatArray = field(default_factory=empty_float_array)
 
-    # Birkhoff quadrature weights w^B_j := ∫_{τ^a}^{τ^b} ℓ_j(τ) dτ (Definition, Section 2)
-    birkhoff_quadrature_weights: FloatArray = field(
-        default_factory=lambda: np.array([], dtype=np.float64)
-    )
+    birkhoff_quadrature_weights: FloatArray = field(default_factory=empty_float_array)
 
-    # Birkhoff basis functions B_j^a(τ) and B_j^b(τ) (Lemma, Section 2)
-    birkhoff_basis_a: FloatArray = field(default_factory=lambda: np.empty((0, 0), dtype=np.float64))
-    birkhoff_basis_b: FloatArray = field(default_factory=lambda: np.empty((0, 0), dtype=np.float64))
-
-    # Birkhoff matrices B^a and B^b (Definition, Section 2)
-    birkhoff_matrix_a: FloatArray = field(
-        default_factory=lambda: np.empty((0, 0), dtype=np.float64)
-    )
-    birkhoff_matrix_b: FloatArray = field(
-        default_factory=lambda: np.empty((0, 0), dtype=np.float64)
-    )
+    birkhoff_matrix_a: FloatArray = field(default_factory=empty_float_matrix)
+    birkhoff_matrix_b: FloatArray = field(default_factory=empty_float_matrix)
 
 
 def _compute_barycentric_weights_birkhoff(nodes: FloatArray) -> FloatArray:
@@ -103,13 +88,8 @@ def _evaluate_lagrange_basis_at_point(
         return lagrange_values
 
     diffs = evaluation_point - nodes
-
     near_zero_mask = np.abs(diffs) < NUMERICAL_ZERO
-    safe_diffs = np.where(
-        near_zero_mask,
-        np.where(diffs == 0, NUMERICAL_ZERO, np.sign(diffs) * NUMERICAL_ZERO),
-        diffs,
-    )
+    safe_diffs = np.where(near_zero_mask, np.sign(diffs) * NUMERICAL_ZERO, diffs)
 
     terms = barycentric_weights / safe_diffs
     sum_terms = np.sum(terms)
@@ -117,15 +97,14 @@ def _evaluate_lagrange_basis_at_point(
     if abs(sum_terms) < NUMERICAL_ZERO:
         return np.zeros(num_nodes, dtype=np.float64)
 
-    normalized_terms = terms / sum_terms
-    return cast(FloatArray, normalized_terms)
+    return terms / sum_terms
 
 
 def _compute_lagrange_antiderivative_at_point(
     nodes: FloatArray,
     barycentric_weights: FloatArray,
     evaluation_point: float,
-    reference_point: float,
+    reference_point: float = 0.0,
 ) -> FloatArray:
     num_nodes = len(nodes)
     antiderivatives = np.zeros(num_nodes, dtype=np.float64)
@@ -133,17 +112,11 @@ def _compute_lagrange_antiderivative_at_point(
     for j in range(num_nodes):
 
         def lagrange_j(tau):
-            lagrange_vals = _evaluate_lagrange_basis_at_point(nodes, barycentric_weights, tau)
-            return lagrange_vals[j]
+            return _evaluate_lagrange_basis_at_point(nodes, barycentric_weights, tau)[j]
 
         if abs(evaluation_point - reference_point) > NUMERICAL_ZERO:
             integral_result, _ = quad(
-                lagrange_j,
-                reference_point,
-                evaluation_point,
-                epsabs=1e-12,
-                epsrel=1e-10,
-                limit=200,
+                lagrange_j, reference_point, evaluation_point, epsabs=1e-12, epsrel=1e-10, limit=200
             )
             antiderivatives[j] = integral_result
 
@@ -162,8 +135,7 @@ def _compute_birkhoff_quadrature_weights(
     for j in range(num_nodes):
 
         def lagrange_j(tau):
-            lagrange_vals = _evaluate_lagrange_basis_at_point(nodes, barycentric_weights, tau)
-            return lagrange_vals[j]
+            return _evaluate_lagrange_basis_at_point(nodes, barycentric_weights, tau)[j]
 
         integral_result, _ = quad(lagrange_j, tau_a, tau_b, epsabs=1e-12, epsrel=1e-10, limit=200)
         weights[j] = integral_result
@@ -177,6 +149,8 @@ def _compute_birkhoff_basis_functions(
     tau_a: float,
     tau_b: float,
     evaluation_points: FloatArray,
+    antiderivatives_at_tau_a: FloatArray,
+    antiderivatives_at_tau_b: FloatArray,
 ) -> tuple[FloatArray, FloatArray]:
     num_nodes = len(nodes)
     num_eval_points = len(evaluation_points)
@@ -184,20 +158,10 @@ def _compute_birkhoff_basis_functions(
     basis_a = np.zeros((num_eval_points, num_nodes), dtype=np.float64)
     basis_b = np.zeros((num_eval_points, num_nodes), dtype=np.float64)
 
-    reference_point = tau_a
-
-    antiderivatives_at_tau_a = _compute_lagrange_antiderivative_at_point(
-        nodes, barycentric_weights, tau_a, reference_point
-    )
-    antiderivatives_at_tau_b = _compute_lagrange_antiderivative_at_point(
-        nodes, barycentric_weights, tau_b, reference_point
-    )
-
     for i, tau in enumerate(evaluation_points):
         antiderivatives_at_tau = _compute_lagrange_antiderivative_at_point(
-            nodes, barycentric_weights, tau, reference_point
+            nodes, barycentric_weights, tau, reference_point=tau_a
         )
-
         basis_a[i, :] = antiderivatives_at_tau - antiderivatives_at_tau_a
         basis_b[i, :] = antiderivatives_at_tau - antiderivatives_at_tau_b
 
@@ -210,29 +174,7 @@ def _compute_birkhoff_basis_components(
     tau_a: float,
     tau_b: float,
 ) -> BirkhoffBasisComponents:
-    """Compute complete Birkhoff basis components for arbitrary grid.
-
-    Implements the complete mathematical theory from Section 2 of the Birkhoff paper
-    for pseudospectral methods using arbitrary grids.
-
-    Mathematical foundations:
-    1. Lagrange basis functions ℓ_j(τ) with ℓ_j(τ_i) = δ_{ij}
-    2. Antiderivatives L_j(τ) = ∫ ℓ_j(s) ds
-    3. Birkhoff basis functions: B_j^a(τ) = L_j(τ) - L_j(τ^a), B_j^b(τ) = L_j(τ) - L_j(τ^b)
-    4. Quadrature weights: w^B_j = ∫_{τ^a}^{τ^b} ℓ_j(τ) dτ
-    5. Equivalence condition: B^a_j(τ) - B^b_j(τ) = w^B_j
-
-    Args:
-        grid_points_tuple: Arbitrary grid points π^N = {τ_0, τ_1, ..., τ_N}
-        tau_a: Left endpoint of interval [τ^a, τ^b]
-        tau_b: Right endpoint of interval [τ^a, τ^b]
-
-    Returns:
-        BirkhoffBasisComponents with complete mathematical objects
-
-    Raises:
-        ValueError: If grid points violate mathematical requirements
-    """
+    """Compute complete Birkhoff basis components for arbitrary grid."""
 
     grid_points = np.array(grid_points_tuple, dtype=np.float64)
 
@@ -246,21 +188,25 @@ def _compute_birkhoff_basis_components(
 
     barycentric_weights = _compute_barycentric_weights_birkhoff(grid_points)
 
-    birkhoff_quadrature_weights = _compute_birkhoff_quadrature_weights(
-        grid_points, barycentric_weights, tau_a, tau_b
-    )
-
-    reference_point = tau_a
-
     antiderivatives_at_tau_a = _compute_lagrange_antiderivative_at_point(
-        grid_points, barycentric_weights, tau_a, reference_point
+        grid_points, barycentric_weights, tau_a, reference_point=tau_a
     )
     antiderivatives_at_tau_b = _compute_lagrange_antiderivative_at_point(
-        grid_points, barycentric_weights, tau_b, reference_point
+        grid_points, barycentric_weights, tau_b, reference_point=tau_a
     )
 
     birkhoff_matrix_a, birkhoff_matrix_b = _compute_birkhoff_basis_functions(
-        grid_points, barycentric_weights, tau_a, tau_b, grid_points
+        grid_points,
+        barycentric_weights,
+        tau_a,
+        tau_b,
+        grid_points,
+        antiderivatives_at_tau_a,
+        antiderivatives_at_tau_b,
+    )
+
+    birkhoff_quadrature_weights = _compute_birkhoff_quadrature_weights(
+        grid_points, barycentric_weights, tau_a, tau_b
     )
 
     return BirkhoffBasisComponents(
@@ -270,51 +216,6 @@ def _compute_birkhoff_basis_components(
         lagrange_antiderivatives_at_tau_a=antiderivatives_at_tau_a,
         lagrange_antiderivatives_at_tau_b=antiderivatives_at_tau_b,
         birkhoff_quadrature_weights=birkhoff_quadrature_weights,
-        birkhoff_basis_a=birkhoff_matrix_a,
-        birkhoff_basis_b=birkhoff_matrix_b,
         birkhoff_matrix_a=birkhoff_matrix_a,
         birkhoff_matrix_b=birkhoff_matrix_b,
     )
-
-
-def _evaluate_birkhoff_interpolation_a_form(
-    basis_components: BirkhoffBasisComponents,
-    y_initial: float,
-    y_derivatives: FloatArray,
-    evaluation_points: FloatArray,
-) -> FloatArray:
-    if len(y_derivatives) != len(basis_components.grid_points):
-        raise ValueError(
-            f"y_derivatives length {len(y_derivatives)} must match grid points {len(basis_components.grid_points)}"
-        )
-
-    num_eval_points = len(evaluation_points)
-    interpolated_values = np.zeros(num_eval_points, dtype=np.float64)
-
-    basis_a = basis_components.birkhoff_basis_a
-    for i in range(num_eval_points):
-        interpolated_values[i] = y_initial + np.dot(basis_a[i, :], y_derivatives)
-
-    return interpolated_values
-
-
-def _evaluate_birkhoff_interpolation_b_form(
-    basis_components: BirkhoffBasisComponents,
-    y_final: float,
-    y_derivatives: FloatArray,
-    evaluation_points: FloatArray,
-) -> FloatArray:
-    if len(y_derivatives) != len(basis_components.grid_points):
-        raise ValueError(
-            f"y_derivatives length {len(y_derivatives)} must match grid points {len(basis_components.grid_points)}"
-        )
-
-    num_eval_points = len(evaluation_points)
-    interpolated_values = np.zeros(num_eval_points, dtype=np.float64)
-
-    basis_b = basis_components.birkhoff_basis_b
-
-    for i in range(num_eval_points):
-        interpolated_values[i] = np.dot(basis_b[i, :], y_derivatives) + y_final
-
-    return interpolated_values
